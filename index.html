@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Dash Player</title>
+</head>
+
+<body>
+    <video id="myVideo"  width='640' height='360' autoplay="autoplay" controls>
+
+    </video>
+    <script>
+        console.log((new Date())*1);
+        var file;
+        var videoElement = document.getElementById('myVideo');
+        var mediaSource;
+        var videoSource;
+        var initialization;
+        var mimeType;
+        var codecs;
+        var bandWidth;
+        var segments;
+        var segCheck;
+        var bufferUpdated = false;
+        var index = 0;
+        var lastTime = 0;
+        var lastCurrentTime = 0;
+
+        var lastRange;
+        var averageRange;
+        var nowRange;
+        function getVideo(url) {
+            if (url !== null) {
+                var xhr = new XMLHttpRequest();
+                xhr.open("GET", url, true);
+                xhr.reesponseType = 'text';
+                xhr.send();
+
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState === xhr.DONE) {
+                        var tempoutput = xhr.response;
+                        var parser = new DOMParser();
+                        var xmlData = parser.parseFromString(tempoutput, 'text/xml', 0);
+                        console.log("parsing mpd file...");
+                        console.log(xmlData);
+                        setupFileType(xmlData);
+                        setupVideo(initialization);
+                    }
+                }
+                xhr.addEventListener('error', function (e) {
+                    console.log("Error: " + e + "Could not load this url");
+                }, false);
+            }
+        }
+        function setupFileType(xmlData){
+            try {
+                var ini = xmlData.querySelectorAll("Initialization");
+                var rep = xmlData.querySelectorAll("Representation");
+                file = xmlData.querySelectorAll("BaseURL")[0].textContent.toString();
+                initialization = ini[0].getAttribute("range");
+                mimeType = xmlData.querySelectorAll('mimeType');
+                bandWidth = rep[0].getAttribute("bandwidth");
+                codecs = rep[0].getAttribute("codecs");
+                segments = xmlData.querySelectorAll("SegmentURL");
+                lastRange = segments[segments.length-1].getAttribute('mediaRange').split('-')[1].toString();
+                console.log(lastRange)
+            }catch(e){
+                console.log(e);
+                return;
+            }
+        }
+        function setupVideo() {
+            if (window.MediaSource) {
+                mediaSource = new window.MediaSource();
+            } else {
+                console.log('MediaSource not supported');
+                return;
+            }
+
+            var url = URL.createObjectURL(mediaSource);
+            //videoElement.pause();
+            videoElement.src = url;
+            //console.log(url,mediaSource);
+            mediaSource.addEventListener('sourceopen', function (e) {
+                try {
+                    videoSource = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.64001E,mp4a.40.2"');
+                    initVideo(initialization,file);
+
+                } catch (e) {
+                    console.log('Exception calling addSourceBuffer for video', e);
+                    return;
+                }
+            },false)
+        }
+
+        function timeToDownload(range) {
+            var vidDur = range.split('-');
+            // Time = size * 8 / bitrate
+            return (((vidDur[1] - vidDur[0])) * 8 / bandWidth);
+        }
+
+        function initVideo(range, url) {
+            var xhr = new XMLHttpRequest();
+            if (range || url) {
+                xhr.open('GET', url);
+                xhr.setRequestHeader("Range", "bytes=" + range);
+                //segCheck = (timeToDownload(range) * 0.5).toFixed(3);
+                xhr.send();
+                xhr.responseType = 'arraybuffer';
+
+                try{
+                    xhr.addEventListener('readystatechange',function(){
+                        if(xhr.readyState == xhr.DONE){
+                            try{
+                                videoSource.appendBuffer(new Uint8Array(xhr.response));
+                                getStarted(file);
+
+                               // videoSource.addEventListener("update",updateFunct,false);
+                            }catch(e){
+                                console.log('Exception while appending initialization content', e);
+
+                            }
+                        }
+                    })
+                }catch(e){
+                    console.log(e);
+                    return;
+                }
+            }else{return};
+        }
+        function updateFunct(){
+            console.log('update');
+            bufferUpdated = true;
+            getStarted(file);
+            videoSource.removeEventListener("update", updateFunct);
+        }
+        function fileChecks(){
+            console.log(index,videoElement.readyState)
+            if(index < segments.length){
+                console.log(videoElement.currentTime,lastTime,segCheck)
+                if((videoElement.currentTime - lastTime >= segCheck)){
+                    playSegment(segments[index].getAttribute('mediaRange').toString(),file);
+                    lastTime = videoElement.currentTime;
+                    index++;
+                }
+                // // 影片停住不動時（快轉或卡住），載入前後一段
+                // if(videoElement.readyState !== 4){
+                //     let nowSegmentIndex = (videoElement.currentTime/videoElement.duration)*segments.length;
+                //     nowSegmentIndex =parseInt(nowSegmentIndex);
+
+                //     console.log("nowSegmentIndex: "+nowSegmentIndex,videoElement.currentTime)
+                //     console.log('readystate: '+videoElement.readyState);
+
+                //     if(nowSegmentIndex!==0){
+                //         playSegment(segments[nowSegmentIndex-1].getAttribute('mediaRange').toString(),file);
+                //     }
+
+                //     playSegment(segments[nowSegmentIndex].getAttribute('mediaRange').toString(),file);
+                //     lastTime = videoElement.currentTime;
+                //     index=nowSegmentIndex;
+                // }
+            }else{
+                videoElement.removeEventListener('timeupdate',fileChecks,false);
+            }
+
+        }
+        // when user trigger fast forward
+        function onSeeking(){
+            let nowSegmentIndex = (videoElement.currentTime/videoElement.duration)*segments.length;
+            nowSegmentIndex =parseInt(nowSegmentIndex);
+
+            console.log("nowSegmentIndex: "+nowSegmentIndex,videoElement.currentTime)
+            console.log('readystate: '+videoElement.readyState);
+
+            if(nowSegmentIndex!==0){
+                playSegment(segments[nowSegmentIndex-1].getAttribute('mediaRange').toString(),file);
+            }
+
+            playSegment(segments[nowSegmentIndex].getAttribute('mediaRange').toString(),file);
+            lastTime = videoElement.currentTime;
+            index=nowSegmentIndex;
+        }
+        function onVideoReadyStateChange(){
+            if(videoElement.readyState !== 4){
+                console.log('no video can play');
+            }
+        }
+        function playSegment(range,url){
+            console.log('trigger playerSegment ',range)
+            var xhr = new XMLHttpRequest();
+            if(range || url){
+                xhr.open('GET',url);
+                xhr.setRequestHeader("Range", "bytes=" + range);
+                xhr.send();
+                xhr.responseType = 'arraybuffer';
+                try{
+                    xhr.addEventListener('readystatechange',function(){
+                        if(xhr.readyState == xhr.DONE){
+                            segCheck = (timeToDownload(range) * 0.3).toFixed(3);
+                            try{
+                                videoSource.appendBuffer(new Uint8Array(xhr.response));
+                                videoElement.play();
+
+
+                            }catch(e){
+                                console.log('Exception while appending', e);
+
+                            }
+                        }
+                    })
+                }catch(e){
+                    console.log(e);
+                    return;
+                }
+            }
+        }
+        function getStarted(url){
+            playSegment(segments[index].getAttribute('mediaRange').toString(),url);
+            videoElement.addEventListener("timeupdate", fileChecks, false);
+            videoElement.addEventListener('readystatechange',onVideoReadyStateChange,false);
+            // for first time play
+            index++;
+            videoElement.muted = true;
+            videoElement.addEventListener('seeking',onSeeking);
+
+            // videoElement.addEventListener('loadeddata',()=>{
+            // console.log('loaded completed!');
+            // console.log((new Date())*1);
+            // videoElement.play();
+
+
+        //})
+        }
+        getVideo('output_800k_dash.mpd');
+    </script>
+</body>
+
+</html>
