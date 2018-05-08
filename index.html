@@ -9,232 +9,257 @@
 </head>
 
 <body>
-    <video id="myVideo"  width='640' height='360' autoplay="autoplay" controls>
+    <!-- <video id="myVideo"  width='640' height='360' autoplay="autoplay" controls> -->
 
     </video>
     <script>
-        console.log((new Date())*1);
-        var file;
-        var videoElement = document.getElementById('myVideo');
-        var mediaSource;
-        var videoSource;
-        var initialization;
-        var mimeType;
-        var codecs;
-        var bandWidth;
-        var segments;
-        var segCheck;
-        var bufferUpdated = false;
-        var index = 0;
-        var lastTime = 0;
-        var lastCurrentTime = 0;
 
-        var lastRange;
-        var averageRange;
-        var nowRange;
-        function getVideo(url) {
-            if (url !== null) {
-                var xhr = new XMLHttpRequest();
-                xhr.open("GET", url, true);
-                xhr.reesponseType = 'text';
-                xhr.send();
-
-                xhr.onreadystatechange = function () {
-                    if (xhr.readyState === xhr.DONE) {
-                        var tempoutput = xhr.response;
-                        var parser = new DOMParser();
-                        var xmlData = parser.parseFromString(tempoutput, 'text/xml', 0);
-                        console.log("parsing mpd file...");
-                        console.log(xmlData);
-                        setupFileType(xmlData);
-                        setupVideo(initialization);
-                    }
+        class DashVideo {
+             constructor(mpdFileUrl) {
+                this._element = document.createElement('video');
+                this.mpdSrc = mpdFileUrl;
+                this._element.id = 'ONEAD-dash-video';
+                this._element.style.width ='640px';
+                this._element.style.height ='360px';
+                this._element.controls = true;
+                this.initPlay = true;
+                this.lastBufferEndTime = 0;
+                this.segmentIndex = 0;
+                this.isFetching = false;
+                this.onBufferUpdateFunc = this.onBufferUpdate.bind(this);
+                this.init();
+            }
+             init() {
+                this.getMPDFile();
+            }
+             getMPDFile() {
+                if (this.mpdSrc && this.mpdSrc.indexOf('mpd') > -1) {
+                    let xhr = new XMLHttpRequest();
+                    xhr.open("GET", this.mpdSrc, true);
+                    xhr.send();
+                    xhr.addEventListener('load', this.onMPDFileLoad.bind(this));
+                    xhr.addEventListener('error', this.onMPDFileError.bind(this));
                 }
-                xhr.addEventListener('error', function (e) {
-                    console.log("Error: " + e + "Could not load this url");
-                }, false);
             }
-        }
-        function setupFileType(xmlData){
-            try {
-                var ini = xmlData.querySelectorAll("Initialization");
-                var rep = xmlData.querySelectorAll("Representation");
-                file = xmlData.querySelectorAll("BaseURL")[0].textContent.toString();
-                initialization = ini[0].getAttribute("range");
-                mimeType = xmlData.querySelectorAll('mimeType');
-                bandWidth = rep[0].getAttribute("bandwidth");
-                codecs = rep[0].getAttribute("codecs");
-                segments = xmlData.querySelectorAll("SegmentURL");
-                lastRange = segments[segments.length-1].getAttribute('mediaRange').split('-')[1].toString();
-                console.log(lastRange)
-            }catch(e){
-                console.log(e);
-                return;
+             onMPDFileLoad(event) {
+                if (event.target.readyState === event.target.DONE) {
+                    let tempoutput = event.target.response;
+                    let parser = new DOMParser();
+                    this.xmlData = parser.parseFromString(tempoutput, 'text/xml');
+                    console.log("parsing mpd file...");
+                    console.log(this.xmlData);
+                    this.mpdInfo = this.parseMPDInfo();
+                    this.setupMediaSource();
+                }
             }
-        }
-        function setupVideo() {
-            if (window.MediaSource) {
-                mediaSource = new window.MediaSource();
-            } else {
-                console.log('MediaSource not supported');
-                return;
+             onMPDFileError(e) {
+                console.error('Error retrieving manifest from ' + e);
             }
+             parseMPDInfo() {
+                let mpdData;
+                let ini = this.xmlData.querySelectorAll("Initialization");
+                let rep = this.xmlData.querySelectorAll("Representation");
+                let segments = this.xmlData.querySelectorAll("SegmentURL");
+                let mediaRangeArr = [];
+                for (let i = 0; i < segments.length; i++) {
+                    mediaRangeArr.push(segments[i].getAttribute('mediaRange'));
+                }
+                mpdData = {
+                    fileUrl: 'video/'+rep[0].querySelector("BaseURL").textContent.toString(),
+                    mimeType: rep[0].getAttribute('mimeType'),
+                    codecs: rep[0].getAttribute("codecs"),
+                    initRange: ini[0].getAttribute("range"),
+                    mediaRangeArr: mediaRangeArr,
+                    rangeArrLength: mediaRangeArr.length
+                }
+                console.log(mpdData);
+                return mpdData;
+            }
+             setupMediaSource() {
+                this.mediaSource = new MediaSource();
+                // createObjectURL() is merely a means of connecting a media element's src attribute with a MediaSource instance.
+                let url = URL.createObjectURL(this.mediaSource);
+                this.pause();
+                this._element.src = url;
+                this.mediaSource.addEventListener('sourceopen', this.onSourceOpen.bind(this), false);
 
-            var url = URL.createObjectURL(mediaSource);
-            //videoElement.pause();
-            videoElement.src = url;
-            //console.log(url,mediaSource);
-            mediaSource.addEventListener('sourceopen', function (e) {
+            }
+             onSourceOpen() {
                 try {
-                    videoSource = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.64001E,mp4a.40.2"');
-                    initVideo(initialization,file);
-
+                    // Call this method when finished using object URL to let the browser not to keep the reference to the file any longer
+                    // 因現行 mp4 檔案用 mp4box 轉出來的 codecs 會多 mp4s.01,mp4s.02，導致無法播放，所以先使用指定的 codecs
+                    URL.revokeObjectURL(this._element.src);
+                    this.videoSourceBuffer = this.mediaSource.addSourceBuffer(`${this.mpdInfo.mimeType}; codecs=avc1.42C01E,mp4a.40.2`);
+                    console.log('<=====setupInitVideoBuffer======>');
+                    this.fetchBuffer(this.mpdInfo.initRange, this.onInitReadyStateChange);
                 } catch (e) {
                     console.log('Exception calling addSourceBuffer for video', e);
                     return;
                 }
-            },false)
-        }
+            }
 
-        function timeToDownload(range) {
-            var vidDur = range.split('-');
-            // Time = size * 8 / bitrate
-            return (((vidDur[1] - vidDur[0])) * 8 / bandWidth);
-        }
+             fetchBuffer(range, onReadyStateChange) {
+                if (range && !this.isFetching) {
+                    this.isFetching = true;
+                    console.log("%cFetch mediaRange:" + range, "color:green")
+                    let xhr = new XMLHttpRequest();
+                    xhr.open('GET', this.mpdInfo.fileUrl, true);
+                    xhr.setRequestHeader('Range', 'bytes=' + range);
+                    xhr.responseType = 'arraybuffer';
+                    xhr.send();
+                    try {
+                        xhr.addEventListener('readystatechange', onReadyStateChange.bind(this), false);
+                    } catch (e) {
+                        console.error('Exception while appending', e);
+                        return;
+                    }
+                }
+            }
+            //append 初始 video buffer
+             onInitReadyStateChange(event) {
+                if (event.target.readyState === event.target.DONE) {
+                    try {
+                        this.isFetching = false;
+                        this.videoSourceBuffer.appendBuffer(new Uint8Array(event.target.response));
+                        this.videoSourceBuffer.addEventListener('updateend', this.onBufferUpdateFunc, false);
+                    } catch (e) {
+                        console.error("Exception while appending initialization content", e);
+                        return;
+                    }
+                }
+            }
+            // 偵測 buffer 注入完成後，
+             onBufferUpdate() {
+                this.bufferUpdated = true;
+                if (this.initPlay) {
+                    console.log('init buffer update');
+                    this.getStarted();
+                    this.initPlay = false;
+                    this.play();
 
-        function initVideo(range, url) {
-            var xhr = new XMLHttpRequest();
-            if (range || url) {
-                xhr.open('GET', url);
-                xhr.setRequestHeader("Range", "bytes=" + range);
-                //segCheck = (timeToDownload(range) * 0.5).toFixed(3);
-                xhr.send();
-                xhr.responseType = 'arraybuffer';
-
-                try{
-                    xhr.addEventListener('readystatechange',function(){
-                        if(xhr.readyState == xhr.DONE){
-                            try{
-                                videoSource.appendBuffer(new Uint8Array(xhr.response));
-                                getStarted(file);
-
-                               // videoSource.addEventListener("update",updateFunct,false);
-                            }catch(e){
-                                console.log('Exception while appending initialization content', e);
-
-                            }
+                } else {
+                    console.log('%cappendBuffer ' + this.mpdInfo.mediaRangeArr[this.segmentIndex] + " DONE!", "color:orange");
+                    this.play();
+                }
+                this.videoSourceBuffer.removeEventListener("updateend", this.onBufferUpdateFunc);
+            }
+             getStarted() {
+                //fetch first mediaRange (segmentIndex = 0)
+                this.fetchNextSegment();
+                this._element.addEventListener("timeupdate", this.timeUpdateAndbufferCheck.bind(this));
+            }
+             timeUpdateAndbufferCheck() {
+                //這個變數防止 buffer 還沒載入完就載入下一段，造成錯誤(moblie下載比較慢，邊下載邊timeupdate，又會去載入下一段造成同時appendBuffer的錯誤)
+                if (this.bufferUpdated) {
+                    if (this.segmentIndex < this.mpdInfo.rangeArrLength - 1) {
+                        // 當前下載最後一段 segment 的前 5 秒下載下一段 segment，之後實際測試後會再微調
+                        if (this._element.currentTime >= this.lastBufferEndTime - 5) {
+                            //if (this._element.currentTime >= this.timeToDownloadNextBuffer()) {
+                            this.bufferUpdated = false;
+                            console.log("%cReady to fetch next segment at " + (this.lastBufferEndTime - 5) + " s", "color:yellow")
+                            this.segmentIndex++;
+                            this.fetchNextSegment();
+                            this.lastBufferEndTime = this.mediaSource.sourceBuffers[0].buffered.end(0);
                         }
-                    })
-                }catch(e){
-                    console.log(e);
-                    return;
+                    } else {
+                        //全部載完之後就停止監測，避免重播時又重拉一次
+                        this._element.removeEventListener('timeupdate', this.timeUpdateAndbufferCheck, false);
+                    }
                 }
-            }else{return};
-        }
-        function updateFunct(){
-            console.log('update');
-            bufferUpdated = true;
-            getStarted(file);
-            videoSource.removeEventListener("update", updateFunct);
-        }
-        function fileChecks(){
-            console.log(index,videoElement.readyState)
-            if(index < segments.length){
-                console.log(videoElement.currentTime,lastTime,segCheck)
-                if((videoElement.currentTime - lastTime >= segCheck)){
-                    playSegment(segments[index].getAttribute('mediaRange').toString(),file);
-                    lastTime = videoElement.currentTime;
-                    index++;
+                //mediaSource.endOfStream() must be invoked before playback ends, in order to see ended event emitted by <video> element.
+                //when last segment updateend, trigger endOfStream
+                if (this.segmentIndex === this.mpdInfo.rangeArrLength - 1) {
+                    this.videoSourceBuffer.addEventListener('updateend', this.lastBufferUpdateEnd.bind(this), false);
                 }
-                // // 影片停住不動時（快轉或卡住），載入前後一段
-                // if(videoElement.readyState !== 4){
-                //     let nowSegmentIndex = (videoElement.currentTime/videoElement.duration)*segments.length;
-                //     nowSegmentIndex =parseInt(nowSegmentIndex);
 
-                //     console.log("nowSegmentIndex: "+nowSegmentIndex,videoElement.currentTime)
-                //     console.log('readystate: '+videoElement.readyState);
-
-                //     if(nowSegmentIndex!==0){
-                //         playSegment(segments[nowSegmentIndex-1].getAttribute('mediaRange').toString(),file);
-                //     }
-
-                //     playSegment(segments[nowSegmentIndex].getAttribute('mediaRange').toString(),file);
-                //     lastTime = videoElement.currentTime;
-                //     index=nowSegmentIndex;
-                // }
-            }else{
-                videoElement.removeEventListener('timeupdate',fileChecks,false);
             }
+             timeToDownloadNextBuffer() {
+                //下載下一段 segment 的時機1:播放到當前 segment 的 0.25 倍時(之所以設定這麼低是因為一段 segment 只有3秒，讓網速慢的裝置有足夠的反應時間)
+                let timeToDownload = (this.mediaSource.sourceBuffers[0].buffered.end(0) - this.lastBufferEndTime) * 0;
 
-        }
-        // when user trigger fast forward
-        function onSeeking(){
-            let nowSegmentIndex = (videoElement.currentTime/videoElement.duration)*segments.length;
-            nowSegmentIndex =parseInt(nowSegmentIndex);
-
-            console.log("nowSegmentIndex: "+nowSegmentIndex,videoElement.currentTime)
-            console.log('readystate: '+videoElement.readyState);
-
-            if(nowSegmentIndex!==0){
-                playSegment(segments[nowSegmentIndex-1].getAttribute('mediaRange').toString(),file);
+                //下載下一段 segment 的時機2:當前影片秒數為已下載的最後一段 segment 結束秒數 的 0.7 倍時
+                //let timeToDownload = this.mediaSource.sourceBuffers[0].buffered.end(0) * 0.7;
+                return timeToDownload;
             }
-
-            playSegment(segments[nowSegmentIndex].getAttribute('mediaRange').toString(),file);
-            lastTime = videoElement.currentTime;
-            index=nowSegmentIndex;
-        }
-        function onVideoReadyStateChange(){
-            if(videoElement.readyState !== 4){
-                console.log('no video can play');
+             fetchNextSegment() {
+                if (this.mpdInfo.mediaRangeArr[this.segmentIndex] !== undefined && this.mpdInfo.fileUrl) {
+                    this.fetchBuffer(this.mpdInfo.mediaRangeArr[this.segmentIndex], this.onFetchNextSegmentReadyStateChange);
+                }
             }
-        }
-        function playSegment(range,url){
-            console.log('trigger playerSegment ',range)
-            var xhr = new XMLHttpRequest();
-            if(range || url){
-                xhr.open('GET',url);
-                xhr.setRequestHeader("Range", "bytes=" + range);
-                xhr.send();
-                xhr.responseType = 'arraybuffer';
-                try{
-                    xhr.addEventListener('readystatechange',function(){
-                        if(xhr.readyState == xhr.DONE){
-                            segCheck = (timeToDownload(range) * 0.3).toFixed(3);
-                            try{
-                                videoSource.appendBuffer(new Uint8Array(xhr.response));
-                                videoElement.play();
+             onFetchNextSegmentReadyStateChange(event) {
+                if (event.target.readyState === event.target.DONE) {
+                    this.isFetching = false;
 
+                    try {
+                        this.videoSourceBuffer.appendBuffer(new Uint8Array(event.target.response));
+                        this.videoSourceBuffer.addEventListener('updateend', this.onBufferUpdateFunc, false);
 
-                            }catch(e){
-                                console.log('Exception while appending', e);
-
-                            }
+                        //在低網速的時候，有機會會發生已經載入下一段segment，但影片還是停住(video 處於播放狀態，
+                        //但buffer不夠多 readystate != 4 時會卡住)，
+                        //此時必須將 currentTime 重設，即可載入下一段
+                        if (this.segmentIndex !== 0 && this.readyState < 3) {
+                            console.log('have not enough buffer to play. readystate: ', this.readyState);
+                            this._element.currentTime = this._element.currentTime;
                         }
-                    })
-                }catch(e){
-                    console.log(e);
-                    return;
+
+                    } catch (e) {
+                        console.error('Exception while appending', e);
+                    }
                 }
             }
+             lastBufferUpdateEnd() {
+                if (!this.videoSourceBuffer.updating && this.mediaSource.readyState === 'open') {
+                    this.mediaSource.endOfStream();
+                    console.log("%cmediaSouce endOfStream()", "color:pink")
+                    this._element.removeEventListener('updatend', this.lastBufferUpdateEnd);
+                }
+            }
+
+             duration() {
+                return parseInt(this._element.duration.toString());
+            }
+
+             currentTime() {
+                return parseInt(this._element.currentTime.toString());
+            }
+
+             play() {
+                this._element.play();
+            }
+             pause() {
+                this._element.pause();
+            }
+             mute() {
+                this._element.muted = true;
+            }
+             unMute() {
+                this._element.muted = false;
+            }
+             volume(value) {
+                this._element.volume = value;
+            }
+             getVolume() {
+                return this._element.volume;
+            }
+             setCurrentTime(time) {
+                this._element.currentTime = time;
+            }
+             get readyState() {
+                return this._element.readyState;
+            }
+             isPlaying() {
+                return !this._element.paused;
+            }
+             autoPlay(value) {
+                this._element.autoplay = value;
+            }
+             ifHasVideoSrc() {
+                return this._element.src !== null;
+            }
+
         }
-        function getStarted(url){
-            playSegment(segments[index].getAttribute('mediaRange').toString(),url);
-            videoElement.addEventListener("timeupdate", fileChecks, false);
-            videoElement.addEventListener('readystatechange',onVideoReadyStateChange,false);
-            // for first time play
-            index++;
-            videoElement.muted = true;
-            videoElement.addEventListener('seeking',onSeeking);
-
-            // videoElement.addEventListener('loadeddata',()=>{
-            // console.log('loaded completed!');
-            // console.log((new Date())*1);
-            // videoElement.play();
-
-
-        //})
-        }
-        getVideo('output_800k_dash.mpd');
+        const mpdVideo = new DashVideo('./video/input_dash.mpd');
+        document.body.appendChild(mpdVideo._element);
     </script>
 </body>
 

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+</head>
+<body>
+
+    </ins>
+    <h2>現在studio的影片</h2>
+    <video src="input.mp4" autoplay muted width="640" height="360" controls></video>
+
+    <h2>studio的影片直接用mp4box轉</h2>
+    <video id="test" src="studio_dashinit.mp4" autoplay muted width="640" height="360" controls></video>
+
+    <h2>studio的影片用<code>ffmpeg -i input.mp4 studio.mp4</code></h2>
+    <video src="studioffmpeg.mp4" autoplay muted width="640" height="360" controls></video>
+
+    <h2>studio的影片先用<code>ffmpeg -i input.mp4 studio.mp4</code>再用mp4box</h2>
+    <video src="studioffmpeg_dashinit.mp4" autoplay muted width="640" height="360" controls></video>
+
+    <script>
+        function supportType(vidType,codType) {
+            var vid = document.getElementById('test');
+            isSupp = vid.canPlayType(vidType+';codecs="'+codType+'"');
+            if (isSupp == "") {
+                isSupp = "No";
+                console.log(isSupp);
+
+            }else{
+                console.log(isSupp);
+            }
+        }
+        supportType('video/mp4','avc1.42C01E,mp4a.40.2')
+    </script>
+</body>
+</html>
