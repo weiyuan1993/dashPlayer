@@ -9,11 +9,7 @@
 </head>
 
 <body>
-    <!-- <video id="myVideo"  width='640' height='360' autoplay="autoplay" controls> -->
-
-    </video>
     <script>
-
         class DashVideo {
              constructor(mpdFileUrl) {
                 this._element = document.createElement('video');
@@ -22,6 +18,7 @@
                 this._element.style.width ='640px';
                 this._element.style.height ='360px';
                 this._element.controls = true;
+                this.autoPlay(true);
                 this.initPlay = true;
                 this.lastBufferEndTime = 0;
                 this.segmentIndex = 0;
