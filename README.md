@@ -1,2 +1,2 @@
 # dashPlayer
-A video player for mega dash
+A video player for MPEG-DASH
